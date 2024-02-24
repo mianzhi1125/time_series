@@ -1,0 +1,11 @@
+import pandas as pd
+
+# Load your Excel file into a DataFrame
+df = pd.read_csv("C:\\Users\\huang\\Desktop\\A1A22\\time serie\\VIX.csv")
+
+
+# Drop rows with null values
+df_cleaned = df.dropna()
+
+# Save the cleaned DataFrame back to the Excel file
+df_cleaned.to_excel('VIXcleaned.xlsx', index=False)
