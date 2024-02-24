@@ -1,0 +1,305 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from statsmodels.tsa.api import VAR
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import coint
+from statsmodels.tsa.vector_ar.vecm import coint_johansen,VECM
+from statsmodels.tsa.stattools import grangercausalitytests
+from statsmodels.tsa.arima.model import ARIMA
+import warnings
+from sklearn.metrics import mean_squared_error
+from pmdarima import auto_arima
+warnings.filterwarnings('ignore')
+
+
+
+#Read my data file
+df = pd.read_csv("C:\\Users\\huang\\Desktop\\A1A22\\time serie\\allDataNew.csv")
+df.set_index('Date', inplace=True)
+df.tail(10)
+
+# Check for infinite or NaN values
+df.replace([np.inf, -np.inf], np.nan, inplace=True)
+df = df.dropna()
+
+# Stationary!
+def test_stationarity(timeseries):
+    dftest = adfuller(timeseries, autolag='AIC')
+    return dftest[1] <= 0.05
+
+# Function to make the time series stationary
+def difference_until_stationary(df):
+    while not df.apply(test_stationarity).all():
+        df = df.apply(lambda x: x.diff()).dropna()
+    return df
+
+# Apply differencing until stationary
+df_diff = difference_until_stationary(df)
+
+
+returns = np.log(df_diff/df_diff.shift(1))
+returns.replace([np.inf, -np.inf], np.nan, inplace=True)
+returns = returns.dropna()
+print("\n\n\n\n\n")
+print(returns.describe())
+
+print("\n\n\n")
+#change my data selection here-------------------------------------------------------------
+#Date ESGU (0) VICE(1)	FSI(2)	ESGD(3)	US(4)
+returns = returns.iloc[:,[0,1,2]]
+pltreturns = returns.iloc[-50:, [0,1]]  # This selects the last 100 rows for the first two columns
+print(returns.describe())
+
+# Create the plot
+plt.figure(figsize=(8, 6))  # Optional: Sets the figure size
+plt.plot(pltreturns.index, pltreturns.iloc[:, 0], label=pltreturns.columns[0], color  = 'green')  # Plot the first column
+plt.plot(pltreturns.index, pltreturns.iloc[:, 1], label=pltreturns.columns[1], color = 'red')  # Plot the second column
+# plt.plot(pltreturns.index, pltreturns.iloc[:, 2], label=pltreturns.columns[2], color = 'black')  # Plot the second column
+plt.grid()
+
+# Set the x-axis limits to the range of the index for the last 100 points
+plt.xlim(pltreturns.index[0], pltreturns.index[-1])
+plt.legend(loc="upper left", fontsize=14)
+plt.xticks(rotation = 45)
+plt.show()
+#------------------------------------------------------------------------------------
+
+#Training and Testing
+split_ratio = 0.8
+split_index = int(len(returns) * split_ratio)
+train = returns[:split_index]
+test = returns[split_index:]
+
+
+#VAR model on training
+model = VAR(endog=train)
+
+
+lags = range(1, 10)
+criterion = 'aic'  # 或 'bic'
+criteria = []
+for lag in lags:
+    result = model.fit(lag)
+    criteria.append(result.info_criteria[criterion])
+
+# Finding optimal LAGS
+best_lag = lags[criteria.index(min(criteria))]
+
+# 估计模型参数
+model_fitted = model.fit(maxlags=best_lag) # Increase maxlags
+lag_order = model_fitted.k_ar
+print("\n\n" f"lag order: {lag_order}")
+print(model_fitted.summary())
+
+
+# GrangerTest1 = model_fitted.test_causality(['ESGD'], ['VICE'], kind='f', signif=0.05)
+# print(GrangerTest1.summary())
+# GrangerTest2 = model_fitted.test_causality(['VICE'], ['ESGD'], kind='f', signif=0.05)
+# print(GrangerTest2.summary())
+
+print("\n\n\n\n\n\n")
+# with 3 variables
+GrangerTest1 = model_fitted.test_causality(['VICE'], ['ESGU', 'FSI'], kind='f', signif=0.05)
+print(GrangerTest1.summary())
+GrangerTest2 = model_fitted.test_causality(['ESGU'], ['VICE', 'FSI'], kind='f', signif=0.05)
+print(GrangerTest2.summary())
+GrangerTest3 = model_fitted.test_causality(['FSI'], ['ESGU', 'VICE'], kind='f', signif=0.05)
+print(GrangerTest3.summary())
+
+print("\n")
+
+
+
+# Custom function to show results in a cleaner format
+def show_result(results):
+
+    variable_names = results.params.index
+    results_df = pd.DataFrame(index=variable_names)
+
+    # 对每个自变量进行操作
+    for var in results.names:
+        # 获取该自变量的系数和统计值
+        coeffs = results.params[var].round(3)
+        pvalues = results.pvalues[var].round(3)
+
+        # 将系数和统计值放入 DataFrame
+        temp_coeffs = []
+        temp_pvalues = []
+
+        for i in range(len(pvalues)):
+            if pvalues[i] < 0.01:
+                temp_coeffs.append(str(coeffs[i]) + '***')
+            elif pvalues[i] < 0.05:
+                temp_coeffs.append(str(coeffs[i]) + '**')
+            elif pvalues[i] < 0.1:
+                temp_coeffs.append(str(coeffs[i]) + '*')
+            else:
+                temp_coeffs.append(str(coeffs[i]))
+
+            temp_pvalues.append(pvalues[i])
+
+        results_df[var + '_coeff'] = temp_coeffs
+        results_df[var + '_pvalue'] = temp_pvalues
+
+    return results_df
+
+# 输出整理后的结果
+
+
+# Call the show_result function and print the results
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
+result_table = show_result(model_fitted)
+print(result_table)
+pd.reset_option('display.max_columns')
+pd.reset_option('display.max_rows')
+
+# Orthogonalized impulse response plot
+
+irf = model_fitted.irf(10)  # 10 periods
+irf.plot(orth=True)
+plt.show()
+
+# Recursive forecasting
+# Initialize the DataFrame to store the forecasts
+recursive_forecast_df = pd.DataFrame(index=test.index, columns=test.columns)
+
+# Initialize the first lag values with the last observation from the training set
+last_lag = train.values[-lag_order:]
+
+# Loop over the test set to forecast one step at a time
+for i in range(len(test)):
+    # Forecast the next step
+    next_step_forecast = model_fitted.forecast(last_lag, steps=1)
+
+    # Ensure the forecast is in the correct format (if necessary)
+    next_step_forecast = np.squeeze(next_step_forecast)
+
+    # Store the forecast in the DataFrame
+    recursive_forecast_df.iloc[i] = next_step_forecast
+
+    # Update the lag values with the most recent forecast
+    # This is critical: ensure the dimensions match between last_lag and next_step_forecast
+    last_lag = np.roll(last_lag, -1, axis=0)
+    last_lag[-1, :] = next_step_forecast
+
+# Convert forecasted values from string objects to floats
+recursive_forecast_df = recursive_forecast_df.astype(float)
+
+
+# Example for exponentiating a log-differenced forecast:
+recursive_forecast_df = np.exp(recursive_forecast_df)
+
+#plotting forecasted and actual
+# Create a figure and a set of subplots
+fig, ax = plt.subplots(3, 1, figsize=(12, 10))
+
+# Plotting 'VICE'
+ax[0].plot(test.index, test['VICE'], label='Actual VICE', color='blue')
+ax[0].plot(recursive_forecast_df.index, recursive_forecast_df['VICE'], label='Forecasted VICE', linestyle='--', color='red')
+ax[0].legend()
+ax[0].set_title('VICE Actual vs Forecast')
+
+# Plotting 'ESGU'
+ax[1].plot(test.index, test['ESGU'], label='Actual ESGU', color='green')
+ax[1].plot(recursive_forecast_df.index, recursive_forecast_df['ESGU'], label='Forecasted ESGU', linestyle='--', color='grey')
+ax[1].legend()
+ax[1].set_title('ESGU Actual vs Forecast')
+
+# Plotting 'VIX'
+ax[2].plot(test.index, test['FSI'], label='Actual FSI', color='grey')
+ax[2].plot(recursive_forecast_df.index, recursive_forecast_df['FSI'], label='Forecasted FSI', linestyle='--', color='blue')
+ax[2].legend()
+ax[2].set_title('FSI Actual vs Forecast')
+
+# Adjust layout
+plt.tight_layout()
+
+# Show the plot
+plt.show()
+#2 variables
+# plt.plot(test.index, test[''], label='Actual ESGU', color='blue')
+# plt.plot(test.index, test['VIX'], label='Actual VIX', color='green')
+#
+# plt.plot(recursive_forecast_df.index, recursive_forecast_df['ESGU'], label='Forecasted ESGU', linestyle='--', color='red')
+# plt.plot(recursive_forecast_df.index, recursive_forecast_df['VIX'], label='Forecasted VIX', linestyle='--', color='orange')
+
+
+plt.title('Time Series Forecast vs. Actual')
+plt.xlabel('Date')
+plt.xticks(rotation=45)
+plt.ylabel('Log Returns')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+#test 1 RMSE
+print('\n')
+for col in test.columns:
+    print(f'RMSE for {col}:', np.sqrt(mean_squared_error(test[col], recursive_forecast_df[col])))
+
+#test 2 MAPE
+print('\n')
+def mean_absolute_percentage_error(y_true, y_pred):
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+for col in test.columns:
+    mape = mean_absolute_percentage_error(test[col], recursive_forecast_df[col])
+    print(f'MAPE for {col}: {mape:.2f}%')
+
+
+print("\n")
+
+# Engle-Granger based cointegration check
+def check_coint(df):
+    s1 = df.iloc[:, 0]
+    s2 = df.iloc[:, 1]
+    coint_t, p_value, crit_value = coint(s1, s2)
+    if p_value < 0.05:
+        return True
+    else:
+        return False
+
+# Johansen based cointegration check
+def check_johansen(df):
+    # Perform Johansen cointegration test
+    johansen_test = coint_johansen(df.values, det_order=0, k_ar_diff=1)
+    # Check for cointegration relationship
+    if johansen_test.lr1[0] > johansen_test.cvt[0, 1]:  # 5% significance level
+        return True
+    else:
+        return False
+
+data = df_diff.iloc[:, [0,1,2]]
+
+
+fig,ax=plt.subplots(3,2,figsize=(12,10))
+
+k=0
+
+for i in range(3):
+    for j in range(1):
+        data.iloc[:,k].plot(ax=ax[i,j]);
+
+ax[i,j].set_title(data.columns[k]);
+
+k+=1
+
+plt.tight_layout()
+
+import itertools
+
+ss=[list(i)for i in list(itertools.combinations(data.columns,2))]
+
+for i in range(len(ss)):
+    if check_coint(data[ss[i]]):(
+        print(f'{ss[i]}存在协整关系'))
+
+
+for i in range(len(ss)):
+    if check_johansen(data[ss[i]]):
+        print(f'{ss[i]}存在协整关系')
+
